@@ -1,0 +1,251 @@
+---
+title: "04 — Visium Integration: Basak + Weber, Annotation"
+---
+
+This script integrates the four Basak Visium sections with the published Weber
+et al. (2024) LC Visium data, annotates the resulting spatial clusters, and
+saves the final annotated object used for all Visium figures.
+
+Inputs:
+  - `output/03_visium_basak/visium_basak_list.rds`
+  - `data/external/Weber/weber_visium_seurat.rds`
+
+Output: `output/04_visium_all/meta_visium_seurat.rds` (32,875 spots)
+
+```{r setup}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+
+dir.create("output/04_visium_all", recursive = TRUE, showWarnings = FALSE)
+
+options(future.globals.maxSize = 40 * 1024^3)
+```
+
+
+# 1. Prepare Weber Visium
+
+The Weber Visium dataset is available from the original publication.
+See `data/README.md` for the expected file path.
+
+```{r weber-visium-prep}
+weber_visium <- readRDS(
+  "data/external/Weber/weber_visium_seurat.rds"
+)  # 20,380 spots
+
+weber_visium <- DietSeurat(weber_visium, assays = "RNA")
+weber_visium@assays$RNA$scale.data <- NULL
+weber_visium@assays$RNA$data       <- NULL
+
+weber_visium$dataset <- "Weber"
+weber_visium@meta.data <- as.data.frame(weber_visium@meta.data) %>%
+  dplyr::rename(percent.mt = subsets_mito_percent) %>%
+  dplyr::select(
+    orig.ident, nCount_RNA, nFeature_RNA, percent.mt,
+    dataset, sample_id, sample_part_id, donor_id,
+    x_coord, y_coord, round_id, part_id,
+    array_row, array_col, annot_region, annot_spot, sizeFactor
+  )
+```
+
+
+# 2. Prepare Basak Visium
+
+```{r basak-visium-prep}
+visium_list <- readRDS("output/03_visium_basak/visium_basak_list.rds")
+
+basak_visium <- merge(
+  x           = visium_list[[1]],
+  y           = visium_list[2:length(visium_list)],
+  add.cell.ids = names(visium_list)
+)  # 12,495 spots
+rm(visium_list)
+
+# Extract tissue coordinates from all four image slots and store in metadata
+# (required to match Weber's x_coord/y_coord format for ggplot-based spatial plots)
+image_names <- names(basak_visium@images)
+
+coord_list <- lapply(image_names, function(img) {
+  coords <- GetTissueCoordinates(basak_visium[[img]])
+  coords$sample_part_id <- img
+  coords
+})
+coords_all <- do.call(rbind, coord_list)
+coords_all <- coords_all[rownames(basak_visium@meta.data), , drop = FALSE]
+
+basak_visium@meta.data$x_coord       <- coords_all$imagecol
+basak_visium@meta.data$y_coord       <- coords_all$imagerow
+basak_visium@meta.data$sample_part_id <- coords_all$sample_part_id
+
+basak_visium <- DietSeurat(basak_visium, assays = "RNA")
+
+basak_visium$sample_id <- basak_visium$Section
+basak_visium$dataset   <- "Basak"
+basak_visium$donor_id  <- "donor_1"
+
+basak_visium@meta.data <- as.data.frame(basak_visium@meta.data) %>%
+  dplyr::select(
+    orig.ident, nCount_RNA, nFeature_RNA, percent.mt,
+    dataset, sample_id, sample_part_id, donor_id,
+    x_coord, y_coord, Section, SectionLevel
+  )
+```
+
+
+# 3. Merge and integrate (SCTransform + RPCA)
+
+```{r integrate}
+visium_all <- merge(weber_visium, basak_visium)  # 32,875 spots
+rm(weber_visium, basak_visium)
+
+visium_all[["RNA"]] <- JoinLayers(visium_all[["RNA"]])
+visium_all[["RNA"]] <- split(visium_all[["RNA"]],
+                              f = visium_all$sample_part_id)
+
+visium_all <- SCTransform(visium_all, assay = "RNA", verbose = FALSE)
+visium_all <- RunPCA(visium_all, verbose = FALSE)
+
+visium_all <- IntegrateLayers(
+  visium_all,
+  method               = RPCAIntegration,
+  normalization.method = "SCT",
+  new.reduction        = "integrated.rpca",
+  k.weight             = 60,
+  verbose              = FALSE
+)
+
+visium_all <- FindNeighbors(visium_all, reduction = "integrated.rpca",
+                             dims = 1:30, k.param = 10, verbose = FALSE)
+visium_all <- FindClusters(visium_all,
+                            resolution = seq(0.1, 1.5, by = 0.1),
+                            verbose = FALSE)
+visium_all <- RunUMAP(visium_all, reduction = "integrated.rpca",
+                       dims = 1:30, reduction.name = "umap.rpca",
+                       verbose = FALSE)
+visium_all <- PrepSCTFindMarkers(visium_all, assay = "SCT", verbose = FALSE)
+```
+
+
+# 4. Identify cluster markers for annotation
+
+Two complementary marker discovery approaches were used:
+(a) IUPHAR-curated GPCR/ligand list,
+    providing biologically interpretable cell-type identifiers;
+(b) genome-wide FindAllMarkers excluding MT/ribosomal genes.
+Together these are used to annotate the 17 clusters at res 0.3.
+
+```{r cluster-markers}
+# (a) Curated gene list
+gpcr_df  <- read.csv("resources/IUPHAR/GtP_to_HGNC_mapping.csv", skip = 1)
+gpcr_vector <- sort(unique(gpcr_df$HGNC.Symbol))
+
+Idents(visium_all) <- visium_all$SCT_snn_res.0.3
+levels(visium_all) <- sort(as.numeric(levels(visium_all)))
+
+curated_markers <- FindAllMarkers(
+  object   = visium_all,
+  features = intersect(gpcr_vector, rownames(visium_all)),
+  verbose  = FALSE
+)
+write.csv(curated_markers,
+          file = "output/04_visium_all/DEGs_gpcrs_res0.3.csv")
+
+# (b) Genome-wide markers
+mito_ribo_genes <- readRDS("resources/gene_lists/mito_ribo_genes.rds")
+gene_vector_all <- setdiff(rownames(visium_all), mito_ribo_genes)
+gene_vector_all <- setdiff(gene_vector_all,
+                            grep("^ENSG", gene_vector_all, value = TRUE))
+
+all_markers <- FindAllMarkers(
+  object          = visium_all,
+  features        = gene_vector_all,
+  logfc.threshold = 0.5,
+  min.pct         = 0.1,
+  verbose         = FALSE
+)
+write.csv(all_markers,
+          file = "output/04_visium_all/DEGs_all_res0.3.csv")
+```
+
+
+# 5. Annotate clusters
+
+Manual cluster-to-cell-type assignments are stored in
+`data/VisiumAll_annotations_res0.3.xlsx`. Annotation was guided by expression
+of canonical markers: DBH/TH/SLC6A2 (NE neurons), TPH2/SLC6A4 (serotonergic),
+TAC1/CRH, ADCYAP1/VGF, PENK, PVALB/SCN4B, GAD1/GAD2 (GABAergic),
+SLC17A6/SLC17A7 (glutamatergic), PLP1/MOG (oligodendrocytes),
+AQP4 (astrocytes), FOXJ1/CAPS (ependymal), ACTA2/COL1A1 (vascular).
+
+```{r annotate}
+visium_meta <- as.data.frame(visium_all@meta.data) %>%
+  dplyr::select(SCT_snn_res.0.3)
+
+# Cluster-to-annotation mapping for Visium resolution 0.3
+annot_df <- tibble::tribble(
+  ~Cluster, ~Annotation,
+  "8",  "NE_Neurons",
+  "12", "Seroto_Neurons",
+  "14", "TAC1_CRH_Neurons",
+  "4",  "ADCYAP1_VGF_Neurons",
+  "15", "PENK_Neurons",
+  "13", "PVALB_SCN4B_Neurons",
+  "3",  "GABA_Neurons",
+  "11", "Glut_Neurons",
+  "10", "Unclassified_Neurons",   # Weber dataset only
+  "6",  "Oligodendrocytes",
+  "5",  "Oligodendrocytes",
+  "1",  "Oligodendrocytes",
+  "2",  "Astrocytes",
+  "16", "Ependymal",
+  "7",  "Vascular",               # Blood / RBCs
+  "9",  "Vascular",               # Endothelial cells
+  "0",  "Unclassified"
+)
+
+meta_df <- visium_meta %>%
+  tibble::rownames_to_column("row_id") %>%
+  mutate(Cluster_Join = as.character(SCT_snn_res.0.3)) %>%
+  left_join(annot_df, by = c("Cluster_Join" = "Cluster")) %>%
+  select(-Cluster_Join) %>%
+  tibble::column_to_rownames("row_id") %>%
+  dplyr::select(Annotation)
+
+visium_all <- AddMetaData(visium_all, metadata = meta_df)
+
+table(is.na(visium_all$Annotation))  # should be all FALSE
+
+visium_all$Annotation <- factor(visium_all$Annotation,
+                                 levels = unique(annot_df$Annotation))
+Idents(visium_all) <- visium_all$Annotation
+
+table(visium_all$Annotation, visium_all$dataset, useNA = "ifany")
+# Spot counts per annotation × dataset (Supplementary Table 3)
+```
+
+
+# 6. Save annotated object
+
+```{r save}
+visium_all@meta.data <- visium_all@meta.data %>%
+  dplyr::select(
+    # Spatial coordinates
+    x_coord, y_coord,
+    # Dataset identity
+    dataset, donor_id, sample_id, sample_part_id,
+    # QC metrics
+    nCount_RNA, nFeature_RNA, percent.mt,
+    nCount_SCT, nFeature_SCT,
+    # Clustering and annotation
+    SCT_snn_res.0.3, Annotation,
+    # Basak-specific
+    Section, SectionLevel,
+    # Weber-specific
+    part_id, round_id, annot_region, annot_spot, array_row, array_col
+  )
+
+visium_all@assays$SCT$scale.data <- NULL
+
+saveRDS(visium_all,
+        file = "output/04_visium_all/meta_visium_seurat.rds")
+```

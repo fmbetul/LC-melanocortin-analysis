@@ -1,0 +1,791 @@
+---
+title: "Supplementary Figures — 1, 2, 3, 7, 8"
+---
+
+This script produces all supplementary figure panels.
+
+Inputs (processed Seurat objects from analysis scripts):
+  - `output/01_basak/basak_snRNA_seurat.rds`
+  - `output/02_meta/meta_snRNA_allcells_seurat.rds`
+  - `output/02_meta/meta_snRNA_neurons_seurat.rds`
+  - `output/04_visium_all/meta_visium_seurat.rds`
+
+All plots are saved to `output/figures/supplementary/`.
+
+```{r setup}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+
+source("R/DotPlot_allow_dups.R")
+
+dir.create("output/figures/supplementary", recursive = TRUE,
+           showWarnings = FALSE)
+```
+
+```{r color-palettes}
+meta_snRNA_cols <- c(
+  "NE Neurons"       = "#E31A1C",
+  "Other Neurons"    = "#FB9A99",
+  "Oligodendrocytes" = "#A6CEE3",
+  "OPCs"             = "#1F78B4",
+  "Astrocytes"       = "#CCEBC5",
+  "Ependymal"        = "grey40",
+  "Microglia"        = "#CAB2D6",
+  "Vascular"         = "#FED9A6"
+)
+
+visium_cols <- c(
+  "NE Neurons"           = "#E31A1C",
+  "Serotonergic Neurons" = "#FF7F00",
+  "TAC1/CRH Neurons"     = "#6A3D9A",
+  "ADCYAP1/VGF Neurons"  = "#FDBF6F",
+  "PENK Neurons"         = "#E7298A",
+  "PVALB/SCN4B Neurons"  = "#B15928",
+  "GABAergic Neurons"    = "#33A02C",
+  "Glutamatergic Neurons"= "#B2DF8A",
+  "Unclassified Neurons" = "#FB9A99",
+  "Oligodendrocytes"     = "#A6CEE3",
+  "Astrocytes"           = "#CCEBC5",
+  "Ependymal"            = "grey40",
+  "Vascular"             = "#FED9A6",
+  "Unclassified"         = "#D9D9D9"
+)
+```
+
+
+# Supplementary Figure 1
+
+## Supp Fig 1a — Meta-analysis UMAP colored by dataset
+
+```{r supp1a}
+meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+
+dataset_cols <- c("Basak" = "#0047AB", "Weber" = "#FFB58A", "Siletti" = "#9BD1B7")
+
+p_s1a <- DimPlot(meta,
+                 reduction = "umap.rpca",
+                 group.by  = "Dataset",
+                 cols      = dataset_cols,
+                 pt.size   = 0.1,
+                 order = c("Basak"),
+                 label     = FALSE) +
+  theme_classic(base_family = "Times New Roman", base_size = 20) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme(
+    title = element_blank(),
+    axis.title  = element_text(),
+    axis.text   = element_text(colour = "black"),
+    legend.text = element_text(size = 22),
+    legend.key.size = unit(0.4, "in")
+  ) +
+  guides(
+    colour = guide_legend(override.aes = list(size = 7))
+    ) +
+  scale_color_manual(
+    values = dataset_cols,
+    breaks = c("Basak", "Weber", "Siletti")
+  )
+
+ggsave(
+  plot     = p_s1a,
+  filename = "output/figures/supplementary/SuppFig1a_UMAP_meta_Dataset.png",
+  height   = 10, width = 12.5, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 1b — QC violin plots: meta-analysis snRNA-seq
+
+```{r supp1b}
+meta <- RenameIdents(meta,
+  "Neurons_NE" = "NE Neurons",
+  "Neurons"    = "Other Neurons",
+  "Oligo"      = "Oligodendrocytes",
+  "OPCs"       = "OPCs",
+  "Astro"      = "Astrocytes",
+  "Ependymo"   = "Ependymal",
+  "Microglia"  = "Microglia",
+  "Vascular"   = "Vascular"
+)
+
+meta$Dataset <- factor(meta$Dataset, levels = rev(c("Basak", "Weber", "Siletti")))
+dataset_cols <- c(
+  "Siletti" = "#9BD1B7",
+  "Weber" = "#FFB58A", 
+  "Basak" = "#0047AB"
+  )
+
+levels(meta) <- rev(levels(meta))
+
+# Rename QC columns for display
+meta@meta.data <- meta@meta.data %>%
+  dplyr::rename(
+    `Sum UMI counts`  = nCount_RNA,
+    `Detected genes`  = nFeature_RNA,
+    `Mito percent`    = percent.mt
+  )
+
+p_s1b <- VlnPlot(meta, 
+                 features = c("Sum UMI counts", "Detected genes", "Mito percent"), 
+                 split.by = "Dataset", 
+                 stack = T, 
+                 cols = dataset_cols) + 
+  theme_classic(base_family = "Times New Roman", base_size = 11) + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(colour = "black", size = 12),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(colour = "black", size = 13, face = "bold"),
+    strip.text = element_text(size = 12, face = "bold"), # panel header
+    legend.text = element_text(size = 13)
+  ) + 
+  guides(fill = guide_legend(reverse = TRUE))
+
+ggsave(
+  plot     = p_s1b,
+  filename = "output/figures/supplementary/SuppFig1b_VlnQC_meta_snRNA.png",
+  height   = 6, width = 8, units = "in", dpi = 1200
+)
+
+rm(meta)
+```
+
+## Supp Fig 1c — All neurons UMAP (all 68 subtypes)
+
+```{r supp1c}
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+levels(neurons) <- rev(levels(neurons))
+
+p_s1c <- DimPlot(neurons,
+                 reduction = "umap.rpca",
+                 pt.size   = 0.1,
+                 label     = TRUE, 
+                 label.box = TRUE,
+                 label.size = 4.5,
+                 repel     = TRUE) +
+  theme_classic(base_family = "Times New Roman", base_size = 20) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme(
+    axis.title = element_text(),
+    axis.text = element_text(colour = "black"),
+    legend.position = "none"
+  ) 
+
+ggsave(
+  plot     = p_s1c,
+  filename = "output/figures/supplementary/SuppFig1c_UMAP_neurons_all68.png",
+  height   = 16, width = 20, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 1d — Dot plot: neuropeptide/receptor signatures (68 subtypes)
+
+```{r supp1d}
+Idents(neurons) <- neurons$Neuron_Subtype
+
+# Reconstruct per-cluster gene list from cluster name gene pairs
+marker_list <- lapply(as.character(levels(neurons)), function(x) {
+  clean_name <- sub("_[0-9]+$", "", x)
+  strsplit(clean_name, "_")[[1]]
+})
+names(marker_list) <- as.character(levels(neurons))
+
+levels(neurons) <- rev(levels(neurons))
+p_s1d <- DotPlot_allow_dups(
+  object   = neurons,
+  features = marker_list,
+  scale    = TRUE,
+  scale.by = "radius"
+) +
+  theme_classic(base_family = "Times New Roman", base_size = 12) +
+  labs(x = "Gene", y = element_blank()) +
+  theme(
+    axis.title   = element_text(size = 26, colour = "black"),
+    axis.text.x  = element_text(colour = "black", angle = 90,
+                                hjust = 1, vjust = 0.5, size = 16),
+    axis.text.y  = element_text(colour = "black", face = "bold", size = 20),
+    legend.title = element_text(size = 24),
+    legend.text  = element_text(size = 20),
+    legend.key.size = unit(0.5, "in")
+  ) +
+  guides(
+    color = guide_colorbar(title = "Scaled\nExpression"),
+    size  = guide_legend(title = "Percent\nExpressed")
+  )
+levels(neurons) <- rev(levels(neurons))
+
+ggsave(
+  plot     = p_s1d,
+  filename = "output/figures/supplementary/SuppFig1d_DotPlot_68subtypes.png",
+  height   = 24, width = 45, units = "in", dpi = 600
+)
+
+rm(neurons)
+```
+
+## Supp Fig 1e — Dot plot: melanocortin pathway and AD genes (all cell types)
+
+```{r supp1e}
+meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+
+# Build combined annotation 
+neurons_df <- as.data.frame(neurons@meta.data) %>%
+  dplyr::select(Neuron_Subtype)
+meta <- AddMetaData(meta, metadata = neurons_df)
+
+meta$Annot <- ifelse(
+  as.character(meta$CellType_Integrated) %in% c("Neurons_NE", "Neurons"),
+  as.character(meta$Neuron_Subtype),
+  as.character(meta$CellType_Integrated)
+)
+meta$Annot <- ifelse(meta$Annot == "Oligo",    "Oligodendrocytes", meta$Annot)
+meta$Annot <- ifelse(meta$Annot == "Astro",    "Astrocytes",       meta$Annot)
+meta$Annot <- ifelse(meta$Annot == "Ependymo", "Ependymal",        meta$Annot)
+
+neuron_order <- unique(c(c("SLC6A2_DBH", "DBH_SLC6A2", "SLC6A2_MET"), sort(as.character(unique((meta$Neuron_Subtype)))))) # 68
+ct_order <- c(neuron_order, "Oligodendrocytes", "OPCs", "Astrocytes", "Ependymal", "Microglia", "Vascular") # 74
+meta$Annot <- factor(meta$Annot, levels = ct_order)
+Idents(meta) <- meta$Annot
+levels(meta) <- rev(levels(meta))
+
+p_s1e <- DotPlot(
+  object = meta, 
+  features = unique(c("DBH", "SLC6A2", "LEPR", "MC1R", "MC2R", "MC3R", "MC4R", "MC5R", "MRAP2",
+                      "APP", "PSEN1", "PSEN2", "APOE", "SORL1", "TREM2")),
+  scale = T
+  ) + 
+  theme_classic(base_family = "Times New Roman", base_size = 12) + 
+  labs(
+    x = "Gene",
+    y = element_blank()
+  ) + 
+  theme(
+    axis.title = element_text(size = 10.5, colour = "black"),
+    axis.text.x = element_text(colour = "black", angle = 45, hjust = 1, vjust = 1, face = "bold"),
+    axis.text.y = element_text(colour = "black", face = "bold"),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.1, "in")
+  ) + 
+  guides(
+    color = guide_colorbar(title = "Scaled\nExpression"),
+    size = guide_legend(title = "Percent\nExpressed")
+  )
+
+ggsave(
+  plot     = p_s1e,
+  filename = "output/figures/supplementary/SuppFig1e_DotPlot_melanocortin_AD_supp.png",
+  height   = 12, width = 6.7, units = "in", dpi = 1200
+)
+
+rm(meta, neurons)
+```
+
+
+# Supplementary Figure 2
+
+```{r visium-load}
+visium_all <- readRDS("output/04_visium_all/meta_visium_seurat.rds")
+
+# Point sizes for SpatialFeaturePlot / SpatialDimPlot per image
+set_pt_size <- data.frame(
+  image   = c("Upper_Rostral", "Lower_Rostral", "Upper_Caudal", "Lower_Caudal",
+               "Br6522_LC_1_round1", "Br6522_LC_2_round1", "Br6522_LC_round3",
+               "Br2701_LC_round2", "Br2701_LC_round3",
+               "Br8153_LC_round2", "Br8153_LC_round3",
+               "Br8079_LC_round3"),
+  pt_size = c(1.05, 1.05, 1.20, 1.30,
+               1.25, 1.35, 1.10,
+               1.25, 1.35,
+               1.10, 1.35,
+               1.20)
+)
+```
+
+## Supp Fig 2a — Visium UMAP colored by dataset
+
+```{r supp2a}
+dataset_cols <- c("Basak" = "#0047AB", "Weber" = "#FFB58A")
+
+p_s2a <- DimPlot(visium_all,
+                 reduction = "umap.rpca",
+                 group.by  = "dataset",
+                 cols      = dataset_cols,
+                 pt.size   = 0.1,
+                 alpha = 0.6) +
+  theme_classic(base_family = "Times New Roman", base_size = 12) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme(
+    title = element_blank(),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(colour = "black"),
+    legend.text = element_text(size = 13),
+    legend.key.size = unit(0.1, "in"),
+    legend.key.height = unit(0.25, "in")
+    ) +
+  guides(colour = guide_legend(override.aes = list(size = 5)))
+
+ggsave(
+  plot     = p_s2a,
+  filename = "output/figures/supplementary/SuppFig2a_UMAP_Visium_Dataset.png",
+  height   = 4, width = 5.5, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 2b — Visium UMAP colored by cell type annotation
+
+```{r supp2b}
+new_names <- c(
+  "NE_Neurons" = "NE Neurons",
+  "Seroto_Neurons" = "Serotonergic Neurons",
+  "TAC1_CRH_Neurons" = "TAC1/CRH Neurons",
+  "ADCYAP1_VGF_Neurons" = "ADCYAP1/VGF Neurons",
+  "PENK_Neurons" = "PENK Neurons",
+  "PVALB_SCN4B_Neurons" = "PVALB/SCN4B Neurons",
+  "GABA_Neurons" = "GABAergic Neurons",
+  "Glut_Neurons" = "Glutamatergic Neurons",
+  "Unclassified_Neurons" = "Unclassified Neurons",
+  "Oligodendrocytes" = "Oligodendrocytes",
+  "Astrocytes" = "Astrocytes",
+  "Ependymal" = "Ependymal",
+  "Vascular" = "Vascular",
+  "Unclassified" = "Unclassified"
+)
+visium_all <- RenameIdents(visium_all, new_names)
+visium_all$Annotation <- Idents(visium_all)
+
+p_s2b <- DimPlot(visium_all,
+                 reduction = "umap.rpca",
+                 group.by  = "Annotation",
+                 cols      = visium_cols,
+                 pt.size   = 0.1,
+                 label     = FALSE) +
+  theme_classic(base_family = "Times New Roman", base_size = 12) +
+  labs(x = "UMAP 1", y = "UMAP 2") +
+  theme(
+    title = element_blank(),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(colour = "black"),
+    legend.position = "right",
+    legend.text = element_text(size = 13),
+    legend.key.size = unit(0.1, "in"),
+    legend.key.height = unit(0.25, "in")
+  ) + 
+  guides(colour = guide_legend(override.aes = list(size = 5)))
+
+ggsave(
+  plot     = p_s2b,
+  filename = "output/figures/supplementary/SuppFig2b_UMAP_Visium_celltypes.png",
+  height   = 4, width = 6.6, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 2c — Visium dot plot: canonical spatial cluster markers
+
+```{r supp2c}
+DefaultAssay(visium_all) <- "SCT"
+levels(visium_all) <- rev(levels(visium_all))
+
+spatial_markers <- c(
+  "STMN2", "SYT1", "DBH", "TH", "SLC6A2", "TPH2", "SLC6A4",
+  "TAC1", "CRH", "ADCYAP1", "VGF", "PENK", "PVALB", "SCN4B",
+  "SLC32A1", "GAD1", "GAD2", "SLC17A6", "SLC17A7",
+  "PLP1", "MOG", "MAG", "AQP4", "CAPS", "FOXJ1", "CCDC153",
+  "HBA2", "FLT1", "DCN"
+)
+
+p_s2c <- DotPlot(
+  object = visium_all, 
+  features = spatial_markers,
+  scale = T
+  ) + 
+  theme_classic(base_family = "Times New Roman", base_size = 11) + 
+  labs(
+    x = "Gene",
+    y = element_blank()
+  ) + 
+  theme(
+    axis.title = element_text(size = 10, colour = "black"),
+    axis.text.x = element_text(colour = "black", angle = 45, hjust = 1, vjust = 1, face = "bold"),
+    axis.text.y = element_text(colour = "black", face = "bold"),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.1, "in")
+  ) + 
+  guides(
+    color = guide_colorbar(title = "Scaled\nExpression"),
+    size = guide_legend(title = "Percent\nExpressed")
+  )
+
+p_s2c <- p_s2c +
+  scale_colour_gradientn(
+    colours = c("#2E7094", "#FFFAE8", "#B00012"),  # Define gradient colors
+    # Ensure 0 is mapped to #FFFAE8
+    values = scales::rescale(c(
+      min(as.numeric(p_s2c[["data"]][["avg.exp.scaled"]]), na.rm = TRUE), 
+      0, 
+      max(as.numeric(p_s2c[["data"]][["avg.exp.scaled"]]), na.rm = TRUE)))  
+  )
+
+ggsave(
+  plot     = p_s2c,
+  filename = "output/figures/supplementary/SuppFig2c_DotPlot_Visium_markers_SCT.png",
+  height   = 3, width = 8.2, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 2d — Visium QC violin plots
+
+```{r supp2d}
+visium_all@meta.data <- visium_all@meta.data %>%
+  dplyr::rename(
+    `Sum UMI counts` = nCount_RNA,
+    `Detected genes` = nFeature_RNA,
+    `Mito percent`   = percent.mt
+  )
+
+visium_all$dataset <- factor(visium_all$dataset, levels = c("Weber", "Basak"))
+dataset_cols <- c("Weber" = "#FFB58A", "Basak" = "#0047AB")
+
+p_s2d <- VlnPlot(visium_all, features = c("Sum UMI counts", "Detected genes", "Mito percent"), split.by = "dataset", stack = T, cols = dataset_cols) + 
+  theme_classic(base_family = "Times New Roman", base_size = 12) + 
+  theme(
+    axis.title.x = element_blank(),
+    axis.text.x = element_text(colour = "black"),
+    axis.title.y = element_blank(),
+    axis.text.y = element_text(colour = "black", size = 13, face = "bold"),
+    strip.text = element_text(size = 13, face = "bold"), # panel header
+    legend.text = element_text(size = 14),
+    legend.key.size = unit(0.3, "in")
+  ) + 
+  # Force the legend to keep the visual order you prefer (Basak on top)
+  guides(fill = guide_legend(reverse = TRUE))
+
+ggsave(
+  plot     = p_s2d,
+  filename = "output/figures/supplementary/SuppFig2d_VlnQC_Visium.png",
+  height   = 6, width = 8, units = "in", dpi = 1200
+)
+```
+
+
+# Supplementary Figure 3
+
+## Supp Fig 3a — Spatial cell-type maps: all sections (Basak + Weber)
+
+```{r supp3a}
+visium_all$sample_id <- factor(visium_all$sample_id,
+                                levels = set_pt_size$image)
+
+plot_df <- FetchData(
+  visium_all,
+  vars = c("x_coord", "y_coord", "sample_id", "Annotation")
+) %>%
+  left_join(set_pt_size, by = c("sample_id" = "image")) %>%
+  mutate(
+    pt_size   = ifelse(is.na(pt_size), 1, pt_size),
+    sample_id = factor(sample_id, levels = set_pt_size$image)
+  ) %>%
+  group_by(sample_id) %>%
+  mutate(
+    x0        = x_coord - min(x_coord, na.rm = TRUE),
+    y0        = y_coord - min(y_coord, na.rm = TRUE),
+    scale_fac = max(c(max(x0, na.rm = TRUE), max(y0, na.rm = TRUE))),
+    x_scaled  = x0 / scale_fac,
+    y_scaled  = y0 / scale_fac
+  ) %>%
+  ungroup()
+
+p_s3a <- ggplot(plot_df, aes(x = x_scaled, y = y_scaled)) +
+  geom_point(aes(color = Annotation, size = pt_size)) +
+  scale_size_identity() +           # use pt_size directly, no legend for size
+  scale_y_reverse() +
+  coord_equal() +
+  facet_wrap(~ sample_id, nrow = 2) +
+  scale_color_manual(values = visium_cols, name = NULL) +
+  theme_classic(base_family = "Times New Roman") +
+  theme(
+    strip.text      = element_text(size = 22, face = "bold"),
+    axis.title      = element_blank(),
+    axis.text       = element_blank(),
+    axis.ticks      = element_blank(),
+    legend.position = "right",
+    legend.text     = element_text(size = 24),
+    legend.key.size = unit(0.4, "in"),
+    legend.key.height = unit(0.5, "in")
+  ) +
+  guides(color = guide_legend(override.aes = list(size = 7), ncol = 1))
+
+ggsave(
+  plot     = p_s3a,
+  filename = "output/figures/supplementary/SuppFig3a_SpatialPlot_ct_all.png",
+  height   = 10, width = 24, units = "in", dpi = 1200
+)
+```
+
+## Supp Fig 3b — Spatial gene expression: all sections
+
+```{r supp3b}
+DefaultAssay(visium_all) <- "RNA"
+visium_all_rna <- NormalizeData(visium_all, verbose = FALSE)
+
+genes_3b <- c("DBH", "SLC6A2", "TH",
+              "MRAP2", "LEPR", "MC1R", "MC4R",
+              "APP", "PSEN1", "PSEN2", "APOE", "SORL1", "TREM2")
+
+for (gene in genes_3b) {
+
+  plot_df <- FetchData(
+    visium_all_rna,
+    vars = c("x_coord", "y_coord", "sample_id", gene)
+  ) %>%
+    left_join(set_pt_size, by = c("sample_id" = "image")) %>%
+    mutate(
+      expression = .data[[gene]],
+      pt_size    = ifelse(is.na(pt_size), 1, pt_size),
+      sample_id  = factor(sample_id, levels = set_pt_size$image)
+    ) %>%
+    arrange(sample_id)
+
+  expr_range <- range(plot_df$expression, na.rm = TRUE)
+
+  p <- ggplot(plot_df, aes(x = x_coord, y = y_coord)) +
+    geom_point(aes(color = expression, size = pt_size)) +
+    scale_size_identity() +
+    scale_y_reverse() +
+    scale_color_gradientn(
+      colours = Seurat:::SpatialColors(n = 100),
+      limits  = expr_range,
+      name    = NULL
+    ) +
+    facet_wrap(~ sample_id, ncol = 6, scales = "free") +
+    labs(
+      title = paste0(gene, " expression"),
+      color = NULL
+    ) +
+    theme_bw(base_family = "Times New Roman") +
+    theme(
+      panel.border      = element_rect(colour = "black", fill = NA,
+                                       linewidth = 0.4),
+      panel.grid        = element_blank(),
+      strip.background  = element_rect(fill = "grey85", colour = "black",
+                                       linewidth = 0.4),
+      strip.text        = element_text(size = 20, face = "bold"),
+      axis.title        = element_blank(),
+      axis.text         = element_blank(),
+      axis.ticks        = element_blank(),
+      axis.line         = element_blank(),
+      legend.text       = element_text(size = 16),
+      legend.key.size = unit(0.4, "in"),
+      legend.position = "right",
+      plot.title        = element_text(face = "bold.italic", size = 30,
+                                       hjust = 0, margin = margin(b = 10))
+    )
+
+  ggsave(
+    plot     = p,
+    filename = paste0(
+      "output/figures/supplementary/SuppFig3b_SpatialExpr_allsections_",
+      gene, ".png"),
+    height   = 2 * 3.6, width = 6 * 3.6, units = "in", dpi = 1200
+  )
+}
+
+rm(visium_all_rna)
+```
+
+
+# Supplementary Figure 7 — GPCR dot plots across snRNA-seq cell types
+
+Multi-page PDF: one page per 26 genes, all IUPHAR GPCR genes detected in
+the meta-analysis snRNA-seq dataset (403 genes across 74 cell types / subtypes).
+
+```{r supp7}
+meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+
+# Build combined annotation (same as Supp Fig 1e)
+neurons_df <- as.data.frame(neurons@meta.data) %>%
+  dplyr::select(Neuron_Subtype)
+meta <- AddMetaData(meta, metadata = neurons_df)
+
+meta$Annot <- ifelse(
+  as.character(meta$CellType_Integrated) %in% c("Neurons_NE", "Neurons"),
+  as.character(meta$Neuron_Subtype),
+  as.character(meta$CellType_Integrated)
+)
+meta$Annot <- ifelse(meta$Annot == "Oligo",    "Oligodendrocytes", meta$Annot)
+meta$Annot <- ifelse(meta$Annot == "Astro",    "Astrocytes",       meta$Annot)
+meta$Annot <- ifelse(meta$Annot == "Ependymo", "Ependymal",        meta$Annot)
+
+neuron_order <- unique(c(c("SLC6A2_DBH", "DBH_SLC6A2", "SLC6A2_MET"), sort(as.character(unique((meta$Neuron_Subtype)))))) # 68
+ct_order <- c(neuron_order, "Oligodendrocytes", "OPCs", "Astrocytes", "Ependymal", "Microglia", "Vascular") # 74
+meta$Annot <- factor(meta$Annot, levels = ct_order)
+Idents(meta) <- meta$Annot
+levels(meta) <- rev(levels(meta))
+
+DefaultAssay(meta) <- "RNA"
+
+# IUPHAR GPCR gene list
+gpcr_df    <- read.csv("resources/IUPHAR/GPCRTargets.csv", skip = 1)
+gene_vector <- c("DBH", "SLC6A2", "TH",
+                 sort(unique(gpcr_df$HGNC.symbol)))
+genes_present <- unique(intersect(gene_vector, rownames(meta)))  # ~403
+
+# --- Dot plots (multi-page PDF) ---
+genes_per_page <- 26 
+
+plot_list <- list()
+
+for (i in seq(1, length(genes_present), by = genes_per_page)) {
+  # pick 20 genes (or fewer for the last page)
+  genes_plot <- genes_present[i : min(i + genes_per_page - 1, length(genes_present))]
+
+  p <- DotPlot(
+    object   = meta,
+    features = genes_plot,
+    scale    = TRUE
+  ) +
+    theme_classic(base_family = "Times", base_size = 12) +
+    labs(
+      x = "Gene",
+      y = NULL
+    ) +
+    theme(
+      axis.title   = element_text(size = 10, colour = "black"),
+      axis.text.x  = element_text(colour = "black", angle = 90, hjust = 1, vjust = 0.5, face = "plain", size = 10),
+      axis.text.y  = element_text(colour = "black", face = "plain", size = 9),
+      legend.title = element_text(size = 10),
+      legend.text  = element_text(size = 8),
+      legend.key.size = unit(0.1, "in"),
+      plot.margin = margin(
+        t = 0,   # top   (in)
+        r = 0.3,      # right (in)
+        b = 0.3,   # bottom
+        l = 0.3,    # left
+        unit = "in"
+      )
+    ) +
+    guides(
+      color = guide_colorbar(title = "Scaled\nExpression"),
+      size  = guide_legend(title = "Percent\nExpressed")
+    )
+
+  plot_list[[length(plot_list) + 1]] <- p
+}
+
+# ---- Combine N plots per page into a single PDF ----
+# How many per page
+nrow_page <- 1
+ncol_page <- 1
+
+# Combine into a multi-page grob object
+pages <- marrangeGrob(
+  grobs = plot_list,
+  nrow  = nrow_page,
+  ncol  = ncol_page,
+  padding = unit(0.3, "in")    # top margin between plots and page edges
+)
+
+ggplot2::ggsave(
+  filename = "output/figures/supplementary/SuppFig7_DotPlots_GPCRs_snRNA.pdf",
+  plot     = pages,
+  width    = 8, height = 11.5, units = "in", dpi = 600
+)
+
+rm(meta, neurons)
+```
+
+
+# Supplementary Figure 8 — GPCR spatial expression maps (Visium)
+
+Multi-page PDF: one page per 4 genes, all IUPHAR GPCR genes detected in the
+integrated Visium dataset (376 genes, 12 sections faceted per gene).
+
+```{r supp8}
+visium_all <- readRDS("output/04_visium_all/meta_visium_seurat.rds")
+
+DefaultAssay(visium_all) <- "RNA"
+visium_all <- NormalizeData(visium_all, verbose = FALSE)
+
+visium_all$sample_id <- factor(visium_all$sample_id,
+                                levels = set_pt_size$image)
+
+gpcr_df    <- read.csv("resources/IUPHAR/GPCRTargets.csv", skip = 1)
+gene_vector <- c("DBH", "SLC6A2", "TH",
+                 sort(unique(gpcr_df$HGNC.symbol)))
+genes_present <- unique(intersect(gene_vector, rownames(visium_all)))  # 376
+
+pt_size_scale <- 0.05
+
+plot_list <- list()
+
+for (gene in genes_present) {
+
+  plot_df <- FetchData(
+    visium_all,
+    vars = c("x_coord", "y_coord", "sample_id", gene)
+  ) %>%
+    dplyr::rename(expression = all_of(gene)) %>%
+    left_join(set_pt_size, by = c("sample_id" = "image")) %>%
+    mutate(
+      pt_size   = ifelse(is.na(pt_size), 1, pt_size_scale * pt_size),
+      sample_id = factor(sample_id, levels = set_pt_size$image)
+    ) %>%
+    arrange(sample_id)
+
+  expr_range <- range(plot_df$expression, na.rm = TRUE)
+
+  p <- ggplot(plot_df, aes(x = x_coord, y = y_coord)) +
+    geom_point(aes(color = expression, size = pt_size)) +
+    scale_size_identity() +
+    scale_y_reverse() +
+    scale_color_gradientn(
+      colours = Seurat:::SpatialColors(n = 100),
+      limits  = expr_range,
+      name    = NULL
+    ) +
+    facet_wrap(~ sample_id, ncol = 6, scales = "free") +
+    labs(title = paste0(gene, " expression")) +
+    theme_bw(base_family = "Times") +
+    theme(
+      panel.border      = element_rect(colour = "black", fill = NA,
+                                       linewidth = 0.4),
+      panel.grid        = element_blank(),
+      strip.background  = element_rect(fill = "grey85", colour = "black",
+                                       linewidth = 0.4),
+      strip.text        = element_text(size = 6.5),
+      axis.title        = element_blank(),
+      axis.text         = element_blank(),
+      axis.ticks        = element_blank(),
+      axis.line         = element_blank(),
+      legend.text       = element_text(size = 10),
+      legend.key.size   = unit(0.15, "in"),
+      legend.position   = "right",
+      plot.title        = element_text(face = "bold.italic", size = 12,
+                                       hjust = 0,
+                                       margin = margin(b = 3)),
+      plot.margin       = margin(t = 0, r = 0.5, b = 0.4, l = 0.5,
+                                  unit = "in")
+    )
+
+  plot_list[[gene]] <- p
+}
+
+pages <- marrangeGrob(
+  grobs   = plot_list,
+  nrow    = 4,
+  ncol    = 1,
+  padding = unit(0.4, "in")
+)
+
+ggplot2::ggsave(
+  filename = "output/figures/supplementary/SuppFig8_SpatialExpr_GPCRs_Visium.pdf",
+  plot     = pages,
+  width    = 8, height = 11.5, units = "in", dpi = 600
+)
+
+rm(visium_all)
+```

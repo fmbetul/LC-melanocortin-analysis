@@ -1,0 +1,232 @@
+---
+title: "01 — Basak snRNA-seq: Loading, QC, Integration, and Annotation"
+---
+
+This script processes the four Basak snRNA-seq Chromium runs (LC001A, LC001B,
+LC002A, LC002B). It produces the annotated, QC-passed Seurat object used in all
+downstream analyses.
+
+Output: `output/01_basak/basak_snRNA_seurat.rds` (2,071 nuclei)
+
+```{r setup}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+
+source("R/qc_plots_by_sample.R")
+source("R/apply_qc_thresholds.R")
+
+dir.create("output/01_basak", recursive = TRUE, showWarnings = FALSE)
+```
+
+
+# 1. Load raw count matrices
+
+```{r load}
+LC001A <- CreateSeuratObject(
+  counts = Read10X(data.dir = "data/snRNA/LC001A_filtered_feature_bc_matrix"),
+  project = "LC"
+)
+LC001A[["percent.mt"]] <- PercentageFeatureSet(LC001A, pattern = "^MT-")
+LC001A$Section      <- "LC001A"
+LC001A$SectionLevel <- "Rostral"
+
+LC001B <- CreateSeuratObject(
+  counts = Read10X(data.dir = "data/snRNA/LC001B_filtered_feature_bc_matrix"),
+  project = "LC"
+)
+LC001B[["percent.mt"]] <- PercentageFeatureSet(LC001B, pattern = "^MT-")
+LC001B$Section      <- "LC001B"
+LC001B$SectionLevel <- "Rostral"
+
+LC002A <- CreateSeuratObject(
+  counts = Read10X(data.dir = "data/snRNA/LC002A_filtered_feature_bc_matrix"),
+  project = "LC"
+)
+LC002A[["percent.mt"]] <- PercentageFeatureSet(LC002A, pattern = "^MT-")
+LC002A$Section      <- "LC002A"
+LC002A$SectionLevel <- "Caudal"
+
+LC002B <- CreateSeuratObject(
+  counts = Read10X(data.dir = "data/snRNA/LC002B_filtered_feature_bc_matrix"),
+  project = "LC"
+)
+LC002B[["percent.mt"]] <- PercentageFeatureSet(LC002B, pattern = "^MT-")
+LC002B$Section      <- "LC002B"
+LC002B$SectionLevel <- "Caudal"
+
+# Merge all four runs
+basak <- merge(LC001A, y = c(LC001B, LC002A, LC002B))
+table(basak$Section, useNA = "ifany")   # LC001A=497 LC001B=540 LC002A=629 LC002B=681
+rm(LC001A, LC001B, LC002A, LC002B)
+```
+
+
+# 2. Pre-QC integration (all cells, including low-quality)
+
+Integration before QC is required to define QC batches per cell type and sample.
+
+```{r preqc-integrate}
+basak$log2_nCount_RNA <- log2(basak$nCount_RNA + 1)
+
+basak <- NormalizeData(basak, verbose = FALSE)
+basak <- FindVariableFeatures(basak, verbose = FALSE)
+basak <- ScaleData(basak, verbose = FALSE)
+basak <- RunPCA(basak, verbose = FALSE)
+basak <- IntegrateLayers(basak, method = RPCAIntegration,
+                         verbose = FALSE, k.weight = 100)
+basak <- RunUMAP(basak, dims = 1:40, reduction = "integrated.dr",
+                 verbose = FALSE)
+basak <- FindNeighbors(basak, reduction = "integrated.dr",
+                       dims = 1:40, k.param = 20, verbose = FALSE)
+basak <- FindClusters(basak, resolution = seq(0.1, 1.5, by = 0.1),
+                      verbose = FALSE)
+basak[["RNA"]] <- JoinLayers(basak[["RNA"]])
+```
+
+
+# 3. Preliminary broad annotation (to define QC batches)
+
+Cell types are annotated at res 0.5 based on canonical marker expression.
+NE neurons: DBH, TH, SLC6A2; oligodendrocytes: MAG, MBP, MOG, PLP1;
+OPCs: PDGFRA, EGFR; astroependymal: GFAP, GJA1, AQP4, FOXJ1;
+microglia: C1QB, AIF1. Cluster 6 is a low-quality cluster (low UMI, high MT%).
+
+```{r preqc-annotate}
+Idents(basak) <- basak$RNA_snn_res.0.5
+
+basak <- RenameIdents(basak,
+  "0"  = "Neurons_NE",
+  "1"  = "Neurons",
+  "3"  = "Neurons",
+  "7"  = "Neurons",
+  "10" = "Neurons",
+  "2"  = "Oligo",
+  "4"  = "Oligo",
+  "9"  = "OPCs",
+  "5"  = "Astroependymal",
+  "8"  = "Microglia",
+  "6"  = "low_UMI"
+)
+
+basak$CellType_AllCells <- Idents(basak)
+```
+
+
+# 4. QC: data-driven, batch-aware thresholds
+
+QC batches were defined as Section × cell type for larger populations 
+(NE neurons, other neurons, oligodendrocytes), while small cell-type populations 
+(OPCs, astroependymal, microglia) and the low-UMI cluster were pooled across 
+sections into a single batch each.
+
+The `qc_plots_by_sample` function estimates per-batch thresholds from kernel 
+density estimates of log2(nCount_RNA) and log2(nFeature_RNA), aided by Otsu 
+thresholds and Gaussian mixture modelling where applicable. Per-batch 
+thresholds are reported in Supplementary Table 1.
+
+```{r qc-run}
+basak$qc_batch <- paste(basak$Section, basak$CellType_AllCells, sep = "_")
+basak$qc_batch <- ifelse(
+  basak$CellType_AllCells %in% c("OPCs", "Astroependymal", "Microglia", "low_UMI"), 
+  as.character(basak$CellType_AllCells), 
+  basak$qc_batch
+  )
+
+res <- qc_plots_by_sample(
+  seurat_obj     = basak,
+  sample_col     = "qc_batch",
+  log2_qc_cols   = c("nFeature_RNA", "nCount_RNA"),
+  qc_cols        = c("percent.mt"),
+  path           = "output/01_basak/QC_plots/",
+  group.by       = "Section",
+  upper_quantile = 0.997,
+  mt_max         = 100,
+  valley_rules   = list(.default = list(strategy = "auto")),
+  floors_raw     = list(nFeature_RNA = 300),
+  plots_ncol     = 4,
+  pdf_width      = 4 * 3.8,
+  pdf_height     = 2 * 3
+)
+
+res$thresholds   # per-batch thresholds (Supplementary Table 1)
+```
+
+```{r qc-apply}
+out <- apply_qc_thresholds(
+  seurat_obj    = basak,
+  thresholds_df = res$thresholds,
+  sample_col    = "qc_batch",
+  lowqc_col     = "CellType_AllCells",
+  lowqc_groups  = "low_UMI"
+)
+
+basak_qc <- out$obj
+out$summary           # total=2347, kept=2071, removed=276
+out$removed_breakdown
+
+round(ncol(basak_qc) / ncol(basak) * 100, 2)  # 88.24% passed QC
+rm(basak)
+```
+
+
+# 5. Re-integration on QC-passed nuclei
+
+```{r reintegrate}
+basak_qc[["RNA"]] <- split(basak_qc[["RNA"]], f = basak_qc$Section)
+
+basak_qc <- NormalizeData(basak_qc, verbose = FALSE)
+basak_qc <- FindVariableFeatures(basak_qc, verbose = FALSE)
+basak_qc <- ScaleData(basak_qc, verbose = FALSE)
+basak_qc <- RunPCA(basak_qc, verbose = FALSE)
+basak_qc <- IntegrateLayers(basak_qc, method = RPCAIntegration,
+                             verbose = FALSE, k.weight = 100)
+basak_qc <- RunUMAP(basak_qc, dims = 1:40, reduction = "integrated.dr",
+                    verbose = FALSE)
+basak_qc <- FindNeighbors(basak_qc, reduction = "integrated.dr",
+                           dims = 1:40, k.param = 20, verbose = FALSE)
+basak_qc <- FindClusters(basak_qc, resolution = seq(0.1, 1.5, by = 0.1),
+                          verbose = FALSE)
+basak_qc[["RNA"]] <- JoinLayers(basak_qc[["RNA"]])
+```
+
+
+# 6. Final annotation (QC-passed nuclei)
+
+Annotation at res 0.7 based on canonical marker expression (same marker sets
+as the preliminary annotation above; cluster identities verified by dot plot).
+
+```{r final-annotate}
+Idents(basak_qc) <- basak_qc$RNA_snn_res.0.7
+
+basak_qc <- RenameIdents(basak_qc,
+  "3"  = "Neurons_NE",
+  "4"  = "Neurons_NE",
+  "11" = "Neurons",
+  "7"  = "Neurons",
+  "1"  = "Neurons",
+  "2"  = "Neurons",
+  "5"  = "Neurons",
+  "0"  = "Oligo",
+  "8"  = "Oligo",
+  "9"  = "OPCs",
+  "6"  = "Astroependymal",
+  "10" = "Microglia"
+)
+
+basak_qc$CellType <- Idents(basak_qc)
+
+table(basak_qc$CellType, useNA = "ifany")
+# Neurons_NE=463, Neurons=897, Oligo=493, OPCs=56, Astroependymal=131, Microglia=31
+```
+
+
+# 7. Save
+
+```{r save}
+basak_qc@meta.data <- basak_qc@meta.data %>%
+  dplyr::select(orig.ident, nCount_RNA, log2_nCount_RNA, nFeature_RNA, percent.mt, Section, SectionLevel, qc_batch,
+                RNA_snn_res.0.7, CellType, CellType_AllCells)
+
+saveRDS(basak_qc, file = "output/01_basak/basak_snRNA_seurat.rds")
+```

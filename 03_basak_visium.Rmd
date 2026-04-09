@@ -1,0 +1,136 @@
+---
+title: "03 — Basak Visium: Section Loading, QC, and Cropping"
+---
+
+This script loads the four Basak Visium sections, computes QC metrics, crops
+low-UMI peripheral regions, and saves a merged list of cropped Seurat objects
+for downstream integration.
+
+Input:  `data/Visium/<section>/`
+Output: `output/03_visium_basak/visium_basak_list.rds` (12,495 spots total)
+
+```{r setup}
+library(Seurat)
+library(ggplot2)
+
+dir.create("output/03_visium_basak", recursive = TRUE, showWarnings = FALSE)
+```
+
+
+# 1. Load and QC each section
+
+For each section, QC metrics (nCount_RNA, nFeature_RNA, percent.mt) are
+visualised and spots in low-UMI peripheral regions are removed by coordinate-
+based cropping. Cropping boundaries were determined visually by comparing
+`nCount_RNA` spatial plots against tissue position images.
+
+## Upper Rostral
+
+```{r upper-rostral}
+L1_1 <- Load10X_Spatial(
+  data.dir     = "data/Visium/Upper_Rostral",
+  filename     = "filtered_feature_bc_matrix.h5",
+  assay        = "RNA",
+  slice        = "Up_Rostral",
+  filter.matrix = TRUE
+)
+L1_1[["percent.mt"]] <- PercentageFeatureSet(L1_1, pattern = "^MT-")
+L1_1$Section      <- "Upper_Rostral"
+L1_1$SectionLevel <- "Rostral"
+
+# Crop low-UMI peripheral region
+coords <- L1_1@images$Up_Rostral@coordinates
+keep   <- rownames(coords[coords$imagerow > -3300 &
+                            coords$imagecol < 33000, ])
+L1_1_cropped <- subset(L1_1, cells = keep)
+rm(L1_1)
+```
+
+## Lower Rostral
+
+```{r lower-rostral}
+L1_2 <- Load10X_Spatial(
+  data.dir     = "data/Visium/Lower_Rostral",
+  filename     = "filtered_feature_bc_matrix.h5",
+  assay        = "RNA",
+  slice        = "Low_Rostral",
+  filter.matrix = TRUE
+)
+L1_2[["percent.mt"]] <- PercentageFeatureSet(L1_2, pattern = "^MT-")
+L1_2$percent.mt[is.na(L1_2$percent.mt)] <- 0
+L1_2$Section      <- "Lower_Rostral"
+L1_2$SectionLevel <- "Rostral"
+
+coords <- L1_2@images$Low_Rostral@coordinates
+keep   <- rownames(coords[coords$imagerow >  -2000 &
+                            coords$imagerow < 33000 &
+                            coords$imagecol >   1200 &
+                            coords$imagecol < 35000, ])
+L1_2_cropped <- subset(L1_2, cells = keep)
+rm(L1_2)
+```
+
+## Upper Caudal
+
+```{r upper-caudal}
+L2_3 <- Load10X_Spatial(
+  data.dir     = "data/Visium/Upper_Caudal",
+  filename     = "filtered_feature_bc_matrix.h5",
+  assay        = "RNA",
+  slice        = "Up_Caudal",
+  filter.matrix = TRUE
+)
+L2_3[["percent.mt"]] <- PercentageFeatureSet(L2_3, pattern = "^MT-")
+L2_3$Section      <- "Upper_Caudal"
+L2_3$SectionLevel <- "Caudal"
+
+coords <- L2_3@images$Up_Caudal@coordinates
+keep   <- rownames(coords[coords$imagecol < 36500, ])
+L2_3_cropped <- subset(L2_3, cells = keep)
+rm(L2_3)
+```
+
+## Lower Caudal
+
+```{r lower-caudal}
+L2_4 <- Load10X_Spatial(
+  data.dir     = "data/Visium/Lower_Caudal",
+  filename     = "filtered_feature_bc_matrix.h5",
+  assay        = "RNA",
+  slice        = "Low_Caudal",
+  filter.matrix = TRUE
+)
+L2_4[["percent.mt"]] <- PercentageFeatureSet(L2_4, pattern = "^MT-")
+L2_4$percent.mt[is.na(L2_4$percent.mt)] <- 0
+L2_4$Section      <- "Lower_Caudal"
+L2_4$SectionLevel <- "Caudal"
+
+coords <- L2_4@images$Low_Caudal@coordinates
+keep   <- rownames(coords[coords$imagerow > -500, ])
+L2_4_cropped <- subset(L2_4, cells = keep)
+rm(L2_4)
+```
+
+
+# 2. Spot counts after cropping
+
+```{r spot-counts}
+sapply(list(L1_1_cropped, L1_2_cropped, L2_3_cropped, L2_4_cropped), ncol)
+# Upper_Rostral  Lower_Rostral  Upper_Caudal  Lower_Caudal
+# (totals sum to 12,495 — Supplementary Table 3)
+```
+
+
+# 3. Save
+
+```{r save}
+visium_list <- list(
+  L1_1 = L1_1_cropped,
+  L1_2 = L1_2_cropped,
+  L2_3 = L2_3_cropped,
+  L2_4 = L2_4_cropped
+)
+
+saveRDS(visium_list, file = "output/03_visium_basak/visium_basak_list.rds")
+rm(L1_1_cropped, L1_2_cropped, L2_3_cropped, L2_4_cropped, visium_list)
+```

@@ -1,0 +1,524 @@
+---
+title: "Main Figures — Figures 1 and 2"
+---
+
+This script produces the panels for main Figures 1 and 2.
+
+Inputs (processed Seurat objects from analysis scripts):
+  - `output/01_basak/basak_snRNA_seurat.rds`
+  - `output/02_meta/meta_snRNA_allcells_seurat.rds`
+  - `output/02_meta/meta_snRNA_neurons_seurat.rds`
+  - `output/04_visium_all/meta_visium_seurat.rds`
+
+All plots are saved to `output/figures/main/`.
+
+```{r setup}
+library(Seurat)
+library(dplyr)
+library(ggplot2)
+
+dir.create("output/figures/main", recursive = TRUE, showWarnings = FALSE)
+```
+
+```{r color-palettes}
+# snRNA-seq Basak cell-type colors (Fig 1b)
+basak_snRNA_cols <- c(
+  "NE Neurons"       = "#E31A1C",
+  "Other Neurons"    = "#FB9A99",
+  "Oligodendrocytes" = "#A6CEE3",
+  "OPCs"             = "#1F78B4",
+  "Astroependymal"   = "#CCEBC5",
+  "Microglia"        = "#CAB2D6"
+)
+
+# snRNA-seq meta-analysis cell-type colors (Fig 1c, 1d, 1g)
+meta_snRNA_cols <- c(
+  "NE Neurons"       = "#E31A1C",
+  "Other Neurons"    = "#FB9A99",
+  "Oligodendrocytes" = "#A6CEE3",
+  "OPCs"             = "#1F78B4",
+  "Astrocytes"       = "#CCEBC5",
+  "Ependymal"        = "grey40",
+  "Microglia"        = "#CAB2D6",
+  "Vascular"         = "#FED9A6"
+)
+
+# DBH subtype colors (Fig 1e, 1f)
+dbh_cols <- c(
+  "SLC6A2/DBH"   = "#E41A1C",
+  "DBH/SLC6A2"   = "#377EB8",
+  "SLC6A2/MET"   = "#4DAF4A",
+  "Other Neurons" = "#D9D9D9"
+)
+
+# Visium cell-type colors (Fig 2b)
+visium_cols <- c(
+  "NE Neurons"           = "#E31A1C",
+  "Serotonergic Neurons" = "#FF7F00",
+  "TAC1/CRH Neurons"     = "#6A3D9A",
+  "ADCYAP1/VGF Neurons"  = "#FDBF6F",
+  "PENK Neurons"         = "#E7298A",
+  "PVALB/SCN4B Neurons"  = "#B15928",
+  "GABAergic Neurons"    = "#33A02C",
+  "Glutamatergic Neurons"= "#B2DF8A",
+  "Unclassified Neurons" = "#FB9A99",
+  "Oligodendrocytes"     = "#A6CEE3",
+  "Astrocytes"           = "#CCEBC5",
+  "Ependymal"            = "grey40",
+  "Vascular"             = "#FED9A6",
+  "Unclassified"         = "#D9D9D9"
+)
+```
+
+
+# Figure 1b — Basak snRNA-seq UMAP
+
+```{r fig1b}
+basak <- readRDS("output/01_basak/basak_snRNA_seurat.rds")
+
+basak <- RenameIdents(basak,
+  "Neurons_NE"    = "NE Neurons",
+  "Neurons"       = "Other Neurons",
+  "Oligo"         = "Oligodendrocytes",
+  "OPCs"          = "OPCs",
+  "Astroependymal" = "Astroependymal",
+  "Microglia"     = "Microglia"
+)
+
+p_1b <- DimPlot(
+  object = basak, 
+  cols = basak_snRNA_cols, 
+  pt.size = 1.5,
+  label = F
+) + 
+  theme_classic(base_family = "Times New Roman", base_size = 12) + 
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2"
+  ) +
+  theme(
+    axis.title = element_text(size = 12),
+    axis.text = element_text(colour = "black"),
+    legend.position = "right",
+    legend.text = element_blank(),
+    legend.key.size = unit(9, "mm")
+  ) + 
+  guides(
+    colour = guide_legend(override.aes = list(size = 5))
+    )
+
+ggsave(
+  plot     = p_1b,
+  filename = "output/figures/main/Fig1b_UMAP_basak_snRNA.png",
+  height   = 3.5, width = 4.5, units = "in", dpi = 1200
+)
+
+rm(basak)
+```
+
+
+# Figure 1c — Meta-analysis UMAP (cell types)
+
+```{r fig1c}
+meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+Idents(meta) <- meta$CellType_Integrated
+
+# Re-label for display
+meta <- RenameIdents(meta,
+  "Neurons_NE" = "NE Neurons",
+  "Neurons"    = "Other Neurons",
+  "Oligo"      = "Oligodendrocytes",
+  "OPCs"       = "OPCs",
+  "Astro"      = "Astrocytes",
+  "Ependymo"   = "Ependymal",
+  "Microglia"  = "Microglia",
+  "Vascular"   = "Vascular"
+)
+
+p_1c <- DimPlot(
+  object = meta, 
+  cols = meta_snRNA_cols, 
+  pt.size = 0.1,
+  label = F
+) + 
+  theme_classic(base_family = "Times New Roman", base_size = 16) + 
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2"
+  ) +
+  theme(
+    axis.title = element_text(),
+    axis.text = element_text(colour = "black"),
+    legend.position = "right",
+    legend.text = element_blank(),
+    legend.key.size = unit(10, "mm")
+  ) + 
+  guides(
+    colour = guide_legend(override.aes = list(size = 6))
+    )
+
+ggsave(
+  plot     = p_1c,
+  filename = "output/figures/main/Fig1c_UMAP_meta_snRNA.png",
+  height   = 5, width = 6.5, units = "in", dpi = 1200
+)
+```
+
+
+# Figure 1d — Dot plot: canonical cell-type markers
+
+```{r fig1d}
+levels(meta) <- rev(names(meta_snRNA_cols))
+
+ct_markers <- c(
+  # Pan-neuronal
+  "STMN2", "SYT1",
+  # NE
+  "DBH", "TH", "SLC6A2",
+  # Oligodendrocytes
+  "MOG", "PLP1", "MAG",
+  # OPCs
+  "PDGFRA", "OLIG1", "OLIG2",
+  # Astrocytes
+  "GFAP", "AQP4", "AGT",
+  # Ependymal
+  "FOXJ1", "CCDC153", "CAPS",
+  # Microglia
+  "P2RY12", "C1QB", "AIF1",
+  # Vascular
+  "FLT1", "DCN", "HBA2"
+)
+
+p_1d <- DotPlot(meta,
+                features = ct_markers,
+                assay    = "RNA",
+                scale    = TRUE) +
+  theme_classic(base_family = "Times New Roman", base_size = 12) + 
+  labs(
+    x = "Gene",
+    y = element_blank()
+  ) + 
+  theme(
+    axis.title = element_text(size = 10.5, colour = "black"),
+    axis.text.x = element_text(colour = "black", angle = 45, hjust = 1, vjust = 1, face = "bold"),
+    axis.text.y = element_text(colour = "black", face = "bold"),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.1, "in")
+  ) + 
+  guides(
+    color = guide_colorbar(title = "Scaled\nExpression"),
+    size = guide_legend(title = "Percent\nExpressed")
+  )
+
+ggsave(
+  plot     = p_1d,
+  filename = "output/figures/main/Fig1d_DotPlot_ct_markers.png",
+  height   = 2.8, width = 6.7, units = "in", dpi = 1200
+)
+
+rm(meta)
+```
+
+
+# Figure 1e — Neurons UMAP (DBH subtypes highlighted)
+
+```{r fig1e}
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+levels(neurons) <- rev(levels(neurons))
+
+dbh_map <- c(
+  "SLC6A2_DBH" = "SLC6A2/DBH",
+  "DBH_SLC6A2" = "DBH/SLC6A2",
+  "SLC6A2_MET" = "SLC6A2/MET"
+)
+
+clust    <- levels(neurons)
+new_names <- setNames(
+  ifelse(clust %in% names(dbh_map), dbh_map[clust], "Other Neurons"),
+  clust
+)
+neurons <- RenameIdents(neurons, new_names)
+
+p_1e <- DimPlot(neurons,
+                reduction = "umap.rpca",
+                cols      = dbh_cols,
+                pt.size   = 0.1,
+                label     = FALSE) +
+  theme_classic(base_family = "Times New Roman", base_size = 16) + 
+  labs(
+    x = "UMAP 1",
+    y = "UMAP 2"
+  ) +
+  theme(
+    axis.title = element_text(),
+    axis.text = element_text(colour = "black"),
+    legend.position = "none"
+  ) + 
+  guides(
+    colour = guide_legend(override.aes = list(size = 6))
+    )
+
+ggsave(
+  plot     = p_1e,
+  filename = "output/figures/main/Fig1e_UMAP_neurons_DBH_subtypes.png",
+  height   = 5, width = 6, units = "in", dpi = 1200
+)
+```
+
+
+# Figure 1f — Heatmap: average expression across DBH subtypes
+
+Gene selection combines NE core markers, literature-curated subtype markers
+(from Weber et al. 2023 and cited references), and DE hits from MAST and
+FindAllMarkers (see `02_meta_integration.Rmd`).
+
+```{r fig1f}
+dbh_subset <- subset(neurons, idents = unname(dbh_map))
+levels(dbh_subset) <- unname(dbh_map)
+rm(neurons)
+
+# Gene set for Fig 1f (NE core + literature-curated + DE hits)
+gene_vector <- unique(c(
+  # NE core
+  "DBH", "SLC6A2", "TH",
+  # Curated subtype markers (one or two subtypes)
+  "NPY",                             # SLC6A2/DBH
+  "HTR2C", "SNTG1",                 # DBH/SLC6A2
+  "LEPR", "BDNF", "TMC3", "INVS",  # SLC6A2/MET
+  # Shared across two subtypes (literature-curated)
+  "GAL", "CARTPT", "GPX3", "DLK1", "CHRNA3",
+  "MET"
+))
+genes_present <- intersect(gene_vector, rownames(dbh_subset))
+
+# Average expression per cluster (unscaled, for display)
+avg_exp <- DotPlot(dbh_subset, features = genes_present, scale = FALSE)$data
+
+avg_exp$features.plot <- factor(avg_exp$features.plot,
+                                levels = genes_present)
+avg_exp$id <- factor(avg_exp$id,
+                     levels = rev(unname(dbh_map)))
+
+p_1f <- ggplot(avg_exp,
+               aes(x = features.plot, y = id, fill = avg.exp.scaled)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_gradient2(
+    low      = "white",
+    mid      = "grey85",
+    high     = "darkblue",
+    midpoint = 0,
+    name     = "Average\nExpression"
+  ) +
+  coord_fixed() +
+  theme_classic(base_family = "Times New Roman", base_size = 12) +
+  labs(x = "Gene", y = element_blank()) +
+  theme(
+    axis.title   = element_text(size = 16),
+    axis.text.x  = element_text(colour = "black", face = "bold",
+                                size = 14, angle = 45, vjust = 1, hjust = 1),
+    axis.text.y  = element_text(colour = "black", face = "bold", size = 15),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 13),
+    legend.key.size = unit(0.2, "in"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8)
+  )
+
+ggsave(
+  plot     = p_1f,
+  filename = "output/figures/main/Fig1f_Heatmap_DBH_subtypes.png",
+  height   = 3.5, width = 10, units = "in", dpi = 1200,
+  bg       = "transparent"
+)
+
+rm(dbh_subset, avg_exp)
+```
+
+
+# Figure 1g — Dot plot: melanocortin pathway and AD-associated genes
+
+```{r fig1g}
+meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+
+# Transfer neuron subtype labels into the all-cells object
+neurons_df <- as.data.frame(neurons@meta.data) %>%
+  dplyr::select(Neuron_Subtype)
+meta <- AddMetaData(meta, metadata = neurons_df)
+
+# Build combined annotation: DBH subtypes + broad cell types
+meta$Annot <- ifelse(
+  meta$Neuron_Subtype %in% c("SLC6A2_DBH", "SLC6A2_MET", "DBH_SLC6A2"), 
+  as.character(meta$Neuron_Subtype), 
+  as.character(meta$CellType_Integrated)
+  )
+meta$Annot <- as.character(meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("SLC6A2_DBH"), "SLC6A2/DBH", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("DBH_SLC6A2"), "DBH/SLC6A2", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("SLC6A2_MET"), "SLC6A2/MET", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("Neurons_NE", "Neurons"), "Other Neurons", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("Oligo"), "Oligodendrocytes", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("Astro"), "Astrocytes", meta$Annot)
+meta$Annot <- ifelse(meta$Annot %in% c("Ependymo"), "Ependymal", meta$Annot)
+
+ct_order <- c("SLC6A2/DBH", "DBH/SLC6A2", "SLC6A2/MET", "Other Neurons", 
+             "Oligodendrocytes", "OPCs", "Astrocytes", "Ependymal", "Microglia", "Vascular")
+
+meta$Annot <- factor(meta$Annot, levels = ct_order)
+
+Idents(meta) <- meta$Annot
+levels(meta) <- rev(levels(meta))
+
+melanocortin_ad_genes <- c(
+  # Melanocortin pathway
+  "LEPR", "MC1R", "MC2R", "MC3R", "MC4R", "MC5R", "MRAP2",
+  # AD-associated
+  "APP", "PSEN1", "PSEN2", "APOE", "SORL1", "TREM2"
+)
+
+p_1g <- DotPlot(meta,
+                features = melanocortin_ad_genes,
+                idents = setdiff(ct_order, "Other Neurons"),
+                assay    = "RNA",
+                scale    = TRUE) +
+  theme_classic(base_family = "Times New Roman", base_size = 12) + 
+  labs(
+    x = "Gene",
+    y = element_blank()
+  ) + 
+  theme(
+    axis.title = element_text(size = 10.5, colour = "black"),
+    axis.text.x = element_text(colour = "black", angle = 45, hjust = 1, vjust = 1, face = "bold"),
+    axis.text.y = element_text(colour = "black", face = "bold"),
+    legend.title = element_text(size = 10),
+    legend.text = element_text(size = 8),
+    legend.key.size = unit(0.1, "in")
+  ) + 
+  guides(
+    color = guide_colorbar(title = "Scaled\nExpression"),
+    size = guide_legend(title = "Percent\nExpressed")
+  )
+
+ggsave(
+  plot     = p_1g,
+  filename = "output/figures/main/Fig1g_DotPlot_melanocortin_AD.png",
+  height   = 2.8, width = 6.7, units = "in", dpi = 1200
+)
+
+rm(meta, neurons)
+```
+
+
+# Figure 2b — Visium: spatial cell-type map (Lower Rostral section)
+
+```{r fig2b}
+visium_all <- readRDS("output/04_visium_all/meta_visium_seurat.rds")
+
+visium_all <- RenameIdents(visium_all,
+  "NE_Neurons"           = "NE Neurons",
+  "Seroto_Neurons"       = "Serotonergic Neurons",
+  "TAC1_CRH_Neurons"     = "TAC1/CRH Neurons",
+  "ADCYAP1_VGF_Neurons"  = "ADCYAP1/VGF Neurons",
+  "PENK_Neurons"         = "PENK Neurons",
+  "PVALB_SCN4B_Neurons"  = "PVALB/SCN4B Neurons",
+  "GABA_Neurons"         = "GABAergic Neurons",
+  "Glut_Neurons"         = "Glutamatergic Neurons",
+  "Unclassified_Neurons" = "Unclassified Neurons",
+  "Oligodendrocytes"     = "Oligodendrocytes",
+  "Astrocytes"           = "Astrocytes",
+  "Ependymal"            = "Ependymal",
+  "Vascular"             = "Vascular",
+  "Unclassified"         = "Unclassified"
+)
+
+# Lower Rostral representative section
+p_2b <- SpatialDimPlot(
+  visium_all,
+  images = "Low_Rostral",
+  image.alpha = 0,
+  pt.size.factor = 1.5,
+  cols = visium_cols
+) + 
+  scale_y_reverse() +
+  theme_classic(base_family = "Times New Roman", base_size = 12) +
+  theme(
+    plot.title = element_text(),
+    text = element_text(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.line = element_blank(),
+    axis.ticks = element_blank(),
+    legend.key.size = unit(0.1, "in"), 
+    legend.key.height = unit(0.25, "in"),
+    legend.title = element_blank(),
+    legend.text = element_text(size = 16)
+  ) +
+  guides(
+    fill = guide_legend(override.aes = list(size = 5))
+    )
+
+ggsave(
+  plot     = p_2b,
+  filename = "output/figures/main/Fig2b_SpatialPlot_LowerRostral_celltypes.png",
+  height   = 4, width = 6.5, units = "in", dpi = 1200
+)
+```
+
+
+# Figure 2c — Visium: spatial gene expression (Lower Rostral section)
+
+```{r fig2c}
+DefaultAssay(visium_all) <- "RNA"
+visium_all <- NormalizeData(visium_all, verbose = FALSE)
+
+genes_2c <- c("DBH", "MRAP2", "APP", "PSEN1",
+              "PSEN2", "APOE", "SORL1", "TREM2")
+
+for (gene in genes_2c) {
+
+   # Pull expression values to calculate dynamic breaks
+  expr_vals <- FetchData(visium_all, vars = gene, slot = "data")[,1]
+  min_val <- floor(min(expr_vals))
+  max_val <- ceiling(max(expr_vals))
+  mid_val <- (min_val + max_val) / 2
+  
+  # Generate plot
+  p <- SpatialFeaturePlot(visium_all, images = "Low_Rostral", image.alpha = 0, 
+                          pt.size.factor = 1.5, features = gene) + 
+    scale_y_reverse() + 
+    labs(
+      title = gene
+    ) +
+    theme_void(base_family = "Times New Roman", base_size = 13) +
+    theme(
+      plot.title = element_text(size = 20, hjust = 0.5, face = "bold.italic"), 
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.line = element_blank(),
+      axis.ticks = element_blank(),
+      legend.position = "right",
+      legend.key.size = unit(0.15, "in"),
+      legend.key.width = unit(0.18, "in"),
+      legend.title = element_blank(),
+      legend.text = element_text(size = 15),
+      panel.background = element_rect(fill = "transparent", colour = NA),  
+      plot.background = element_rect(fill = "transparent", colour = NA)
+      ) +
+    # Force the legend to only show 3 specific integer/rounded breaks
+    scale_fill_gradientn(
+      colors = rev(RColorBrewer::brewer.pal(n = 11, name = "Spectral")),
+      breaks = c(min_val, mid_val, max_val),
+      labels = c(min_val, mid_val, max_val),
+      limits = c(min_val, max_val) # Explicitly set limits to prevent clipping
+    )
+
+  ggsave(
+    plot     = p,
+    filename = paste0("output/figures/main/Fig2c_SpatialExpr_LowerRostral_",
+                      gene, ".png"),
+    height   = 2.6, width = 3.1, units = "in", dpi = 1200, bg = "transparent"
+  )
+}
+
+rm(visium_all)
+```

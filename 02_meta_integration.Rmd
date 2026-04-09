@@ -1,0 +1,487 @@
+---
+title: "02 — snRNA-seq Meta-integration: Three-dataset RPCA, Neuronal Subtypes, and DE"
+---
+
+This script integrates the Basak snRNA-seq data with the published Weber et al.
+(2024) and Siletti et al. (2023) LC/pons datasets, annotates the integrated
+object, performs neuron-level subtype analysis, and runs differential expression
+between the two dominant DBH+ NE neuron subtypes.
+
+Inputs:
+  - `output/01_basak/basak_snRNA_seurat.rds`
+  - `data/external/Weber/weber_snRNA_seurat.rds`
+  - `data/external/Siletti/Pons_PnRF_PB_seurat.rds`
+
+Outputs (Supplementary Table 2 documents nuclei counts per dataset):
+  - `output/02_meta/meta_snRNA_allcells_seurat.rds`    (46,417 nuclei)
+  - `output/02_meta/meta_snRNA_neurons_seurat.rds`     (33,375 neuronal nuclei)
+  - `output/02_meta/DE/markers_MAST.csv`
+
+```{r setup}
+library(Seurat)
+library(SeuratWrappers)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+
+dir.create("output/02_meta/DE", recursive = TRUE, showWarnings = FALSE)
+
+options(future.globals.maxSize = 40 * 1024^3)  # 40 GB for large integrations
+```
+
+
+# 1. Prepare datasets for integration
+
+## 1.1 Basak
+
+```{r basak-prep}
+basak <- readRDS("output/01_basak/basak_snRNA_seurat.rds")  # 2,071 nuclei
+
+basak <- RenameCells(basak, add.cell.id = "basak")
+
+basak$Dataset <- "Basak"
+basak$Sample  <- basak$Section
+basak$Donor   <- "Donor_1"
+basak$orig.ident <- basak$Section
+
+basak@meta.data <- basak@meta.data %>%
+  dplyr::select(Dataset, orig.ident, Donor, Sample,
+                nCount_RNA, nFeature_RNA, percent.mt,
+                SectionLevel, CellType, CellType_AllCells)
+```
+
+## 1.2 Weber et al. 2024
+
+The Weber dataset is available from the original publication.
+See `data/README.md` for the expected file path.
+
+```{r weber-prep}
+weber <- readRDS("data/external/Weber/weber_seurat.rds")  # 20,191 nuclei
+
+weber <- DietSeurat(weber, assay = "RNA")
+weber@assays$RNA$scale.data <- NULL
+weber@assays$RNA$data       <- NULL
+
+weber$Dataset    <- "Weber"
+weber$Donor      <- weber$orig.ident
+weber$nCount_RNA   <- weber$nCount_originalexp
+weber$nFeature_RNA <- weber$nFeature_originalexp
+weber[["percent.mt"]] <- PercentageFeatureSet(weber, pattern = "^MT-")
+
+weber@meta.data <- weber@meta.data %>%
+  dplyr::select(Dataset, orig.ident, Donor, Sample,
+                nCount_RNA, nFeature_RNA, percent.mt,
+                label_merged, supervised_NE, unsupervised_NE)
+```
+
+## 1.3 Siletti et al. 2023
+
+Only the parabrachial / pontine reticular formation section (PnRF_PB) containing
+DBH+ NE neurons is used. See `data/README.md` for the expected file path.
+
+```{r siletti-prep}
+siletti <- readRDS("data/external/Siletti/Pons_PnRF_PB_seurat.rds")  # 24,155 nuclei
+
+siletti$Dataset <- "Siletti"
+siletti$Sample  <- as.character(siletti$sample_id)
+siletti$Donor   <- as.character(siletti$donor_id)
+siletti[["percent.mt"]] <- PercentageFeatureSet(siletti, pattern = "^MT-")
+
+siletti@meta.data <- siletti@meta.data %>%
+  dplyr::select(Dataset, orig.ident, Donor, Sample,
+                nCount_RNA, nFeature_RNA, percent.mt,
+                supercluster_term, cluster_id, subcluster_id,
+                dissection, tissue, sex, development_stage)
+```
+
+
+# 2. Three-dataset RPCA integration (all cell types)
+
+Four integration methods were evaluated (RPCA, CCA, Harmony, FastMNN);
+RPCA produced the best mixing of datasets while preserving biological structure
+and was used for all analyses.
+
+```{r integrate-allcells}
+seurat_meta <- merge(basak, y = c(weber, siletti))  # 46,417 nuclei
+rm(basak, weber, siletti)
+
+seurat_meta[["RNA"]] <- JoinLayers(seurat_meta[["RNA"]])
+
+seurat_meta <- DietSeurat(seurat_meta, assays = "RNA")
+seurat_meta@assays$RNA$scale.data <- NULL
+
+seurat_meta[["RNA"]] <- split(seurat_meta[["RNA"]],
+                               f = seurat_meta$Sample)
+
+seurat_meta <- NormalizeData(seurat_meta, verbose = FALSE)
+seurat_meta <- FindVariableFeatures(seurat_meta, verbose = FALSE)
+seurat_meta <- ScaleData(seurat_meta, verbose = FALSE)
+seurat_meta <- RunPCA(seurat_meta, verbose = FALSE)
+seurat_meta <- IntegrateLayers(seurat_meta, method = RPCAIntegration,
+                                new.reduction = "integrated.rpca",
+                                verbose = FALSE, k.weight = 100)
+seurat_meta <- FindNeighbors(seurat_meta, reduction = "integrated.rpca",
+                              dims = 1:30, k.param = 20, verbose = FALSE)
+seurat_meta <- FindClusters(seurat_meta,
+                             resolution = seq(0.1, 2.0, by = 0.1),
+                             verbose = FALSE)
+seurat_meta <- RunUMAP(seurat_meta, reduction = "integrated.rpca",
+                        dims = 1:30, reduction.name = "umap.rpca",
+                        verbose = FALSE)
+seurat_meta[["RNA"]] <- JoinLayers(seurat_meta[["RNA"]])
+```
+
+## 2.1 Annotate broad cell types
+
+Annotation at res 0.6 based on canonical marker expression.
+NE neurons: DBH, TH, SLC6A2; pan-neuronal: STMN2, SYT1;
+oligodendrocytes: MAG, MBP, MOG, PLP1; OPCs: PDGFRA, EGFR;
+astrocytes: GFAP, GJA1, AQP4; ependymal: FOXJ1, CCDC153, CAPS;
+microglia: C1QB, AIF1; vascular: ACTA2, TAGLN, COL1A1.
+
+```{r annotate-allcells}
+Idents(seurat_meta) <- seurat_meta$RNA_snn_res.0.6
+
+seurat_meta <- RenameIdents(seurat_meta,
+  "21" = "Neurons_NE",
+  "24" = "Neurons",
+  "0"  = "Neurons",  "1"  = "Neurons",  "2"  = "Neurons",
+  "4"  = "Neurons",  "7"  = "Neurons",  "8"  = "Neurons",
+  "10" = "Neurons",  "11" = "Neurons",  "12" = "Neurons",
+  "14" = "Neurons",  "15" = "Neurons",  "16" = "Neurons",
+  "18" = "Neurons",  "19" = "Neurons",  "20" = "Neurons",
+  "23" = "Neurons",  "26" = "Neurons",  "27" = "Neurons",
+  "28" = "Neurons",  "29" = "Neurons",
+  "3"  = "Oligo",    "5"  = "Oligo",    "9"  = "Oligo",
+  "13" = "OPCs",
+  "6"  = "Astro",
+  "17" = "Microglia",
+  "25" = "Ependymo",
+  "22" = "Vascular"
+)
+
+seurat_meta$CellType_Integrated <- Idents(seurat_meta)
+
+table(seurat_meta$CellType_Integrated, seurat_meta$Dataset, useNA = "ifany")
+# Expected (Supplementary Table 2):
+#   Neurons_NE : Basak=346, Weber=306, Siletti=113
+#   Neurons    : Basak=1012, Weber=16201, Siletti=15397
+
+seurat_meta@assays$RNA$scale.data.1 <- NULL
+seurat_meta@assays$RNA$scale.data <- NULL
+
+seurat_meta@meta.data <- seurat_meta@meta.data %>%
+  dplyr::select(
+    # Core identity
+    Dataset, orig.ident, Donor, Sample,
+    # Final annotation
+    RNA_snn_res.0.6, CellType_Integrated,
+    # QC metrics
+    nCount_RNA, nFeature_RNA, percent.mt,
+    # Basak-specific
+    SectionLevel,
+    # Weber-specific (useful for cross-dataset comparison)
+    label_merged, supervised_NE, unsupervised_NE,
+    # Siletti-specific
+    supercluster_term, dissection
+    )
+
+saveRDS(seurat_meta, file = "output/02_meta/meta_snRNA_allcells_seurat.rds")
+rm(seurat_meta)
+```
+
+
+# 3. Neuron-only integration and subtype annotation
+
+```{r neurons-subset}
+seurat_meta <- readRDS("output/02_meta/meta_snRNA_allcells_seurat.rds")
+
+neurons <- subset(seurat_meta,
+                  idents = c("Neurons_NE", "Neurons"))  # 33,375 nuclei
+rm(seurat_meta)
+
+neurons <- DietSeurat(neurons, assays = "RNA")
+```
+
+```{r neurons-integrate}
+neurons[["RNA"]] <- split(neurons[["RNA"]], f = neurons$Sample)
+
+neurons <- NormalizeData(neurons, verbose = FALSE)
+neurons <- FindVariableFeatures(neurons, verbose = FALSE)
+neurons <- ScaleData(neurons, verbose = FALSE)
+neurons <- RunPCA(neurons, verbose = FALSE)
+neurons <- IntegrateLayers(neurons, method = RPCAIntegration,
+                            new.reduction = "integrated.rpca",
+                            verbose = FALSE, k.weight = 60)
+neurons <- FindNeighbors(neurons, reduction = "integrated.rpca",
+                          dims = 1:30, k.param = 10, verbose = FALSE)
+neurons <- FindClusters(neurons,
+                         resolution = seq(0.1, 1.5, by = 0.1),
+                         verbose = FALSE)
+neurons <- RunUMAP(neurons, reduction = "integrated.rpca",
+                    dims = 1:30, reduction.name = "umap.rpca",
+                    verbose = FALSE)
+neurons[["RNA"]] <- JoinLayers(neurons[["RNA"]])
+```
+
+## 3.1 Identify cluster markers using curated GPCR/ligand gene list
+
+Cluster labels are derived by selecting the top-2 discriminative genes from the
+IUPHAR curated list per cluster, concatenated into a gene-pair name.
+
+```{r neurons-markers}
+Idents(neurons) <- neurons$RNA_snn_res.1.5
+length(levels(neurons))  # 68 transcriptionally distinct clusters
+
+# Load IUPHAR GPCR/ligand gene list
+gpcr_df    <- read.csv("resources/IUPHAR/GtP_to_HGNC_mapping.csv", skip = 1)
+gene_vector <- unique(gpcr_df$HGNC.Symbol)
+
+# Cluster markers restricted to curated gene list
+marker_genes <- FindAllMarkers(
+  object   = neurons,
+  features = intersect(gene_vector, rownames(neurons)),
+  verbose  = FALSE
+)
+write.csv(marker_genes,
+          file = "output/02_meta/DEGs_neurons_res1.5_curated.csv")
+
+# Select top 2 discriminative genes per cluster (high FC, low background)
+markers_filtered <- marker_genes %>%
+  dplyr::filter(avg_log2FC > 0.5 & pct.1 > 0.1 &
+                pct.2 < 0.05 & p_val_adj < 0.05) %>%
+  group_by(cluster) %>%
+  slice_head(n = 2) %>%
+  ungroup() %>%
+  mutate(cluster = factor(cluster, levels = levels(neurons))) %>%
+  arrange(cluster)
+
+# Relax criteria for clusters with no marker meeting strict filters
+missing_clusters <- setdiff(levels(neurons),
+                             unique(markers_filtered$cluster))
+
+if (length(missing_clusters) > 0) {
+  missing_markers <- marker_genes %>%
+    dplyr::filter(cluster %in% missing_clusters,
+                  avg_log2FC > 0.5 & pct.1 > 0.05 &
+                  pct.2 < 0.2 & p_val_adj < 0.05) %>%
+    group_by(cluster) %>%
+    slice_head(n = 2) %>%
+    ungroup() %>%
+    mutate(cluster = factor(cluster, levels = levels(neurons))) %>%
+    arrange(cluster)
+}
+
+marker_df <- rbind(markers_filtered, missing_markers) %>%
+  mutate(cluster = factor(cluster, levels = levels(neurons)))
+```
+
+## 3.2 Build cluster annotation labels
+
+```{r neurons-annotate}
+cluster_annotations <- marker_df %>%
+  group_by(cluster) %>%
+  summarise(Annotation = paste(gene, collapse = "_"), .groups = "drop") %>%
+  mutate(row_id = row_number()) %>%
+  arrange(Annotation, row_id) %>%
+  group_by(Annotation) %>%
+  mutate(
+    Annotation_unique = ifelse(
+      row_number() == 1,
+      Annotation,
+      paste0(Annotation, "_", row_number())
+    )
+  ) %>%
+  ungroup() %>%
+  arrange(row_id) %>%
+  select(-row_id)
+
+write.csv(cluster_annotations,
+          file = "output/02_meta/cluster_annotations_neurons.csv")
+
+# Transfer annotations to metadata
+seurat_meta_df <- as.data.frame(neurons@meta.data) %>%
+  dplyr::select(RNA_snn_res.1.5)
+
+meta_df <- seurat_meta_df %>%
+  tibble::rownames_to_column("row_id") %>%
+  mutate(Cluster_Join = as.character(RNA_snn_res.1.5)) %>%
+  left_join(cluster_annotations, by = c("Cluster_Join" = "cluster")) %>%
+  rename(CellType = Annotation_unique) %>%
+  select(-Cluster_Join) %>%
+  tibble::column_to_rownames("row_id") %>%
+  dplyr::select(CellType)
+
+neurons <- AddMetaData(neurons, metadata = meta_df,
+                        col.name = "Neuron_Subtype")
+
+# Prioritise DBH subtypes at the top of the level ordering
+dbh_clusters  <- c("SLC6A2_DBH", "DBH_SLC6A2", "SLC6A2_MET")
+cluster_levels <- c(dbh_clusters,
+                    setdiff(sort(unique(neurons$Neuron_Subtype)),
+                            dbh_clusters))
+neurons$Neuron_Subtype <- factor(neurons$Neuron_Subtype,
+                                   levels = cluster_levels)
+Idents(neurons) <- neurons$Neuron_Subtype
+
+table(neurons$Neuron_Subtype[neurons$Neuron_Subtype %in% dbh_clusters],
+      neurons$Dataset[neurons$Neuron_Subtype %in% dbh_clusters],
+      useNA = "ifany")
+# SLC6A2/DBH: Basak=256, Weber=285, Siletti=65
+# DBH/SLC6A2: Basak=112, Weber=177, Siletti=5
+# SLC6A2/MET: Basak=3,   Weber=43,  Siletti=43
+```
+
+```{r neurons-save}
+neurons@meta.data <- neurons@meta.data %>%
+  dplyr::select(
+    # Core identity
+    Dataset, orig.ident, Donor, Sample,
+    # Annotations
+    Neuron_Subtype, CellType_Integrated,
+    # QC metrics
+    nCount_RNA, nFeature_RNA, percent.mt,
+    # Basak-specific
+    SectionLevel,
+    # Weber-specific (useful for cross-dataset comparison)
+    label_merged, supervised_NE, unsupervised_NE,
+    # Siletti-specific
+    supercluster_term, dissection
+    )
+
+saveRDS(neurons, file = "output/02_meta/meta_snRNA_neurons_seurat.rds")
+rm(neurons)
+```
+
+
+# 4. Differential expression: SLC6A2_DBH vs DBH_SLC6A2 (MAST)
+
+MAST single-cell DE comparing the two most abundant DBH+ NE neuron subtypes,
+adjusting for donor effect, library size, and mitochondrial read fraction.
+
+## 4.1 Data preparation
+
+```{r de-prep}
+library(MAST)
+
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+Idents(neurons) <- neurons$Neuron_Subtype
+
+dbh_subset <- subset(neurons,
+                     idents = c("SLC6A2_DBH", "DBH_SLC6A2"))  # 900 cells
+rm(neurons)
+
+# Remove donors with < 20 cells in either subtype (statistical stability)
+dbh_subset$Donor <- factor(dbh_subset$Donor)
+dbh_subset$Neuron_Subtype <- droplevels(dbh_subset$Neuron_Subtype)
+
+meta_df <- dbh_subset@meta.data %>%
+  tibble::rownames_to_column("cell_id") %>%
+  group_by(Neuron_Subtype, Donor) %>%
+  mutate(n_cells = n()) %>%
+  ungroup()
+
+cells_to_keep <- meta_df %>%
+  filter(n_cells >= 20) %>%
+  pull(cell_id)
+
+dbh_filtered <- subset(dbh_subset, cells = cells_to_keep)  # 890 cells
+rm(dbh_subset)
+
+table(dbh_filtered$Neuron_Subtype, dbh_filtered$Donor, useNA = "ifany")
+# SLC6A2_DBH: Br2701=157, Br8079=124, Donor_1=256, H18.30.002=41, H19.30.001=24
+# DBH_SLC6A2: Br2701=80,  Br8079=96,  Donor_1=112
+```
+
+## 4.2 MAST
+
+```{r mast}
+Idents(dbh_filtered) <- dbh_filtered$Neuron_Subtype
+log2FC_limit <- 2
+
+markers_mast <- FindMarkers(
+  object          = dbh_filtered,
+  ident.1         = "SLC6A2_DBH",
+  ident.2         = "DBH_SLC6A2",
+  test.use        = "MAST",
+  logfc.threshold = 0.1,
+  min.pct         = 0.05,
+  only.pos        = FALSE,
+  latent.vars     = c("nCount_RNA", "percent.mt", "Donor")
+)
+
+write.csv(markers_mast,
+          file = "output/02_meta/DE/markers_MAST.csv")
+
+# Construct volcano plot dataframe (used in figures code)
+markers_filtered <- markers_mast %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  mutate(
+    neg_log10_p = -log10(p_val_adj),
+    sig = case_when(
+      p_val_adj < 0.05 & avg_log2FC >  log2FC_limit ~ "Up_in_SLC6A2_DBH",
+      p_val_adj < 0.05 & avg_log2FC < -log2FC_limit ~ "Up_in_DBH_SLC6A2",
+      TRUE                                           ~ "Not_significant"
+    )
+  ) %>%
+  dplyr::filter(sig %in% c("Up_in_SLC6A2_DBH", "Up_in_DBH_SLC6A2"))
+
+write.csv(markers_filtered,
+          file = "output/02_meta/DE/markers_MAST_filtered.csv")
+
+table(markers_filtered$sig)  # Up_in_DBH_SLC6A2 = 20, Up_in_SLC6A2_DBH = 5
+rm(dbh_filtered)
+```
+
+> HTR2C, SNTG1 : Up_in_DBH_SLC6A2
+
+
+# 5. FindAllMarkers: DBH subtype markers (used in Fig 1f heatmap)
+
+Seurat FindAllMarkers identifies genes with specificity for each DBH subtype
+(including SLC6A2_MET). Genes from this analysis supplement the literature-
+curated gene set displayed in the heatmap of Fig 1f.
+
+```{r findallmarkers}
+mito_ribo_genes <- readRDS("resources/gene_lists/mito_ribo_genes.rds")
+
+neurons <- readRDS("output/02_meta/meta_snRNA_neurons_seurat.rds")
+Idents(neurons) <- neurons$Neuron_Subtype
+
+dbh_subset <- subset(neurons,
+  idents = c("SLC6A2_DBH", "DBH_SLC6A2", "SLC6A2_MET"))  # 989 cells
+rm(neurons)
+
+# Remove uninformative gene classes
+gene_vector <- setdiff(rownames(dbh_subset), mito_ribo_genes)
+gene_vector <- setdiff(gene_vector,
+                       grep("^ENSG", gene_vector, value = TRUE))
+gene_vector <- setdiff(gene_vector,
+                       grep("^LINC", gene_vector, value = TRUE))
+
+all_markers <- FindAllMarkers(
+  object          = dbh_subset,
+  features        = gene_vector,
+  logfc.threshold = 0.5,
+  min.pct         = 0.05,
+  verbose         = FALSE
+)
+write.csv(all_markers,
+          file = "output/02_meta/DE/markers_FindAllMarkers_DBH.csv")
+
+# Filtered marker set used in Fig 1f
+markers_filtered <- all_markers %>%
+  dplyr::filter(avg_log2FC > 0.5 & pct.1 > 0.2 &
+                pct.2 < 0.2 & p_val_adj < 0.05) %>%
+  mutate(cluster = factor(cluster,
+                           levels = c("SLC6A2_DBH", "DBH_SLC6A2", "SLC6A2_MET"))) %>%
+  arrange(cluster)
+
+write.csv(markers_filtered,
+          file = "output/02_meta/DE/markers_FindAllMarkers_DBH_filtered.csv")
+
+rm(dbh_subset, all_markers, markers_filtered)
+```
+> CHRNA3 : Up in SLC6A2_DBH
+> LEPR, BDNF, TMC3, INVS : Up in SLC6A2_MET
