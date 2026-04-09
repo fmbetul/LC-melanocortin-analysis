@@ -56,7 +56,7 @@ The Weber dataset is available from the original publication.
 See `data/README.md` for the expected file path.
 
 ```{r weber-prep}
-weber <- readRDS("data/external/Weber/weber_seurat.rds")  # 20,191 nuclei
+weber <- readRDS("data/external/Weber/weber_snRNA_seurat.rds")  # 20,191 nuclei
 
 weber <- DietSeurat(weber, assay = "RNA")
 weber@assays$RNA$scale.data <- NULL

@@ -3,7 +3,8 @@
 This repository contains the analysis code accompanying the manuscript:
 
 > **Cellular Signatures of Melanocortin Pathway Genes Across the Locus Coeruleus**  
-> Basak et al., *Acta Neuropathologica Communications* (accepted)
+> Basak A, Erol FMB, De Rosa MC, et al. *Acta Neuropathologica Communications* (2026).  
+> https://doi.org/10.1186/s40478-026-02287-x
 
 ---
 
@@ -26,7 +27,7 @@ We characterize melanocortin pathway gene expression in the human locus coeruleu
 │   └── IUPHAR/
 │       ├── README.md             # Source and version information
 │       ├── GPCRTargets.csv       # IUPHAR GPCR gene list
-│       └── GtP_to_HGNC_mapping.csv
+│       └── GtP_to_HGNC_mapping.csv  # IUPHAR target → HGNC symbol mapping (all families)
 ├── R/
 │   ├── apply_qc_thresholds.R     # Batch-aware QC filtering
 │   ├── qc_plots_by_sample.R      # QC visualization
